@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from src.installer import Config, Installer, InstallError, valid_domain, valid_path
 
@@ -10,38 +11,72 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
             path.write_text(
-                """domains: {origin: vpn.example.com, panel: vpn.example.com, front: front.example.com}
+                """domains: {origin: vpn.example.net, panel: vpn.example.net, front: front.example.net}
 xhttp: {path: tunnel, port: 2053}
 xui: {version: v3.5.0}
+ftp: {enabled: false}
 """,
                 encoding="utf-8",
             )
-            cfg = Config.load(str(path))
+            cfg = Config.load(str(path), interactive=False)
             self.assertEqual(cfg.xhttp_path, "/tunnel")
 
     def test_rejects_unpinned_xui(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
             path.write_text(
-                "domains: {origin: vpn.example.com, front: front.example.com}\nxui: {version: latest}\n"
+                "domains: {origin: vpn.example.net, front: front.example.net}\nxui: {version: latest}\nftp: {enabled: false}\n"
             )
             with self.assertRaises(InstallError):
-                Config.load(str(path))
+                Config.load(str(path), interactive=False)
 
     def test_rejects_separate_origin_until_san_is_supported(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
             path.write_text(
-                "domains: {origin: origin.example.com, panel: panel.example.com, front: front.example.com}\n"
+                "domains: {origin: origin.example.net, panel: panel.example.net, front: front.example.net}\nftp: {enabled: false}\n"
             )
             with self.assertRaises(InstallError):
-                Config.load(str(path))
+                Config.load(str(path), interactive=False)
 
     def test_validators(self):
         self.assertEqual(valid_domain("VPN.Example.com."), "vpn.example.com")
         self.assertEqual(valid_path("abc-123"), "/abc-123")
         with self.assertRaises(InstallError):
             valid_path("../bad")
+
+    def test_interactive_fills_example_values(self):
+        answers = iter(
+            [
+                "vpn.example.net",
+                "",
+                "front.example.net",
+                "admin@example.net",
+                "ftp.example.net",
+                "real-user",
+                "/www/front.example.net",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(Path("config.yaml").read_text(encoding="utf-8"))
+            cfg = Config.load(
+                str(path),
+                input_fn=lambda _prompt: next(answers),
+                password_fn=lambda _prompt: "ftp-secret",
+            )
+        self.assertEqual(cfg.origin_domain, "vpn.example.net")
+        self.assertEqual(cfg.panel_domain, "vpn.example.net")
+        self.assertEqual(cfg.ftp_host, "ftp.example.net")
+        self.assertEqual(cfg.ftp_user, "real-user")
+        self.assertEqual(cfg.ftp_password, "ftp-secret")
+
+    def test_non_interactive_lists_missing_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(Path("config.yaml").read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(InstallError, "domains.origin.*ftp.password"):
+                Config.load(str(path), interactive=False)
 
 
 class RenderingTests(unittest.TestCase):
@@ -71,6 +106,24 @@ class RenderingTests(unittest.TestCase):
         link = self.installer.vless_link()
         self.assertIn("@front.example.com:443", link)
         self.assertIn("path=%2Fp", link)
+
+    def test_ftp_connect_timeout_reports_context_without_quit_crash(self):
+        self.installer.cfg.ftp_enabled = True
+        self.installer.cfg.ftp_host = "ftp.example.net"
+        self.installer.cfg.ftp_port = 21
+        self.installer.cfg.ftp_user = "user"
+        self.installer.cfg.ftp_password = "secret"
+        self.installer.cfg.ftp_site_dir = "/www/front.example.net"
+        self.installer.dry_run = False
+        ftp = mock.Mock()
+        ftp.sock = None
+        ftp.connect.side_effect = TimeoutError("timed out")
+        with (
+            mock.patch("src.installer.ftplib.FTP", return_value=ftp),
+            self.assertRaisesRegex(InstallError, "FTP failed.*timed out"),
+        ):
+            self.installer.configure_ftp(None)
+        ftp.quit.assert_not_called()
 
 
 if __name__ == "__main__":

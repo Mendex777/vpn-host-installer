@@ -12,7 +12,7 @@ It intentionally supports one tested setup: Ubuntu/Debian, a pinned 3x-ui releas
 ## Safety
 
 - No passwords or generated UUIDs belong in Git.
-- FTP password is hidden input or `VHI_FTP_PASSWORD`.
+- FTP password may come from hidden input, protected YAML, or `VHI_FTP_PASSWORD`.
 - Credentials are stored in `/etc/vpn-host-installer/secrets.json` with mode `0600`.
 - Commands use argument arrays instead of interpolated shell strings.
 - 3x-ui is the only process managing Xray.
@@ -32,7 +32,8 @@ Create the front-domain website on the shared hosting and enable TLS there.
 
 ## Install
 
-The first run creates the configuration and stops:
+The first bootstrap run creates the configuration and stops. On the next command,
+every blank or example value is requested interactively:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Mendex777/vpn-host-installer/main/install.sh | bash
@@ -49,11 +50,26 @@ export VHI_FTP_PASSWORD
 unset VHI_FTP_PASSWORD
 ```
 
-Never place the password directly in command arguments or YAML.
+Never place the password directly in command arguments. Prefer hidden input or
+`VHI_FTP_PASSWORD`; YAML is supported when unattended installation requires it.
+
+All interactive values can instead be supplied in YAML, including FTP connection
+details and `ftp.password`. The file is created and enforced with mode `0600`.
+For unattended provisioning, use:
+
+```bash
+/opt/vpn-host-installer/.venv/bin/python /opt/vpn-host-installer/install.py --non-interactive
+```
+
+This mode never prompts. It reports every missing required field before changing
+the server. `VHI_FTP_PASSWORD` overrides `ftp.password` and is preferable in CI.
 
 ## Configuration and repeat runs
 
 See [`config.yaml`](config.yaml). `xui.version` must be an exact tag such as `v3.5.0`; moving targets such as `latest` are rejected.
+
+FTP configuration includes `enabled`, `host`, `port`, `user`, `password`, and
+`site_dir`. Example/test values are deliberately rejected as incomplete.
 
 The Apache rule proxies the entire XHTTP route tree:
 

@@ -10,8 +10,13 @@ xhttp:
   path: /p
   port: 2053
 ftp:
+  enabled: true
   host: 192.0.2.20
+  port: 21
   user: u0000000
+  # Optional: if empty, hidden interactive input is used.
+  # This file is forced to mode 0600 when the installer runs.
+  password: ""
   site_dir: /www/reg.example.com
 firewall:
   enable: true

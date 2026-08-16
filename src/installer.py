@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,67 @@ def valid_path(value: str) -> str:
     return value
 
 
+def is_example(value: str) -> bool:
+    """Return true for intentionally non-routable values from config.yaml."""
+    value = value.strip().lower()
+    return (
+        not value
+        or value.endswith((".example.com", "@example.com"))
+        or value in {"example.com", "u0000000"}
+        or value.startswith(("192.0.2.", "198.51.100.", "203.0.113."))
+    )
+
+
+def prompt_value(
+    value: Any,
+    label: str,
+    *,
+    interactive: bool,
+    input_fn: Callable[[str], str],
+    default: str = "",
+    secret: bool = False,
+    password_fn: Callable[[str], str] = getpass.getpass,
+) -> str:
+    current = "" if value is None else str(value).strip()
+    if current and not is_example(current):
+        return current
+    if not interactive:
+        return default
+    suffix = f" [{default}]" if default else ""
+    answer = (password_fn if secret else input_fn)(f"{label}{suffix}: ").strip()
+    return answer or default
+
+
+def prompt_bool(
+    value: Any,
+    label: str,
+    *,
+    interactive: bool,
+    input_fn: Callable[[str], str],
+    default: bool,
+) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is not None and str(value).strip():
+        normalized = str(value).strip().lower()
+        if normalized in {"y", "yes", "true", "1", "да", "д"}:
+            return True
+        if normalized in {"n", "no", "false", "0", "нет", "н"}:
+            return False
+        raise InstallError(f"Invalid boolean value for {label}: {value!r}")
+    if not interactive:
+        return default
+    hint = "Y/n" if default else "y/N"
+    answer = input_fn(f"{label} [{hint}]: ").strip().lower()
+    if not answer:
+        return default
+    if answer in {"y", "yes", "true", "1", "да", "д"}:
+        return True
+    if answer in {"n", "no", "false", "0", "нет", "н"}:
+        return False
+    raise InstallError(f"Invalid answer for {label}: {answer!r}")
+
+
 @dataclass
 class Config:
     origin_domain: str
@@ -101,39 +163,174 @@ class Config:
     xui_version: str = "v3.5.0"
     acme_email: str = ""
     ftp_host: str = ""
+    ftp_port: int = 21
     ftp_user: str = ""
+    ftp_password: str = field(default="", repr=False)
     ftp_site_dir: str = ""
+    ftp_enabled: bool = True
     enable_ufw: bool = True
     ssh_port: int = 22
 
     @classmethod
-    def load(cls, path: str) -> Config:
+    def load(
+        cls,
+        path: str,
+        *,
+        interactive: bool = True,
+        input_fn: Callable[[str], str] = input,
+        password_fn: Callable[[str], str] = getpass.getpass,
+    ) -> Config:
         try:
             raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         except FileNotFoundError as exc:
-            raise InstallError(f"Config not found: {path}") from exc
+            if not interactive:
+                raise InstallError(f"Config not found: {path}") from exc
+            raw = {}
         domains, xhttp = raw.get("domains", {}), raw.get("xhttp", {})
         xui, ftp, firewall = (
             raw.get("xui", {}),
             raw.get("ftp", {}),
             raw.get("firewall", {}),
         )
+        origin = prompt_value(
+            domains.get("origin"),
+            "Origin/panel domain",
+            interactive=interactive,
+            input_fn=input_fn,
+        )
+        panel = prompt_value(
+            domains.get("panel"),
+            "Panel domain",
+            interactive=interactive,
+            input_fn=input_fn,
+            default=origin,
+        )
+        front = prompt_value(
+            domains.get("front"),
+            "Shared-hosting front domain",
+            interactive=interactive,
+            input_fn=input_fn,
+        )
+        acme_email = prompt_value(
+            raw.get("acme_email"),
+            "Let's Encrypt email (optional)",
+            interactive=interactive,
+            input_fn=input_fn,
+        )
+        xhttp_path = prompt_value(
+            xhttp.get("path"),
+            "XHTTP path",
+            interactive=interactive,
+            input_fn=input_fn,
+            default="/p",
+        )
+        xray_port = int(
+            prompt_value(
+                xhttp.get("port"),
+                "Local Xray port",
+                interactive=interactive,
+                input_fn=input_fn,
+                default="2053",
+            )
+        )
+        xui_version = prompt_value(
+            xui.get("version"),
+            "Pinned 3x-ui version",
+            interactive=interactive,
+            input_fn=input_fn,
+            default="v3.5.0",
+        )
+        enable_ufw = prompt_bool(
+            firewall.get("enable"),
+            "Enable UFW",
+            interactive=interactive,
+            input_fn=input_fn,
+            default=True,
+        )
+        ssh_port = int(
+            prompt_value(
+                firewall.get("ssh_port"),
+                "SSH port",
+                interactive=interactive,
+                input_fn=input_fn,
+                default="22",
+            )
+        )
+        ftp_enabled = prompt_bool(
+            ftp.get("enabled"),
+            "Configure shared-hosting FTP",
+            interactive=interactive,
+            input_fn=input_fn,
+            default=True,
+        )
+        ftp_host = ftp_user = ftp_password = ftp_site_dir = ""
+        ftp_port = int(ftp.get("port", 21))
+        if ftp_enabled:
+            ftp_host = prompt_value(
+                ftp.get("host"),
+                "FTP host or IP",
+                interactive=interactive,
+                input_fn=input_fn,
+            )
+            ftp_user = prompt_value(
+                ftp.get("user"),
+                "FTP username",
+                interactive=interactive,
+                input_fn=input_fn,
+            )
+            ftp_site_dir = prompt_value(
+                ftp.get("site_dir"),
+                "FTP site directory",
+                interactive=interactive,
+                input_fn=input_fn,
+                default=f"/www/{front}" if front else "",
+            )
+            ftp_password = prompt_value(
+                ftp.get("password") or os.environ.get("VHI_FTP_PASSWORD"),
+                "FTP password",
+                interactive=interactive,
+                input_fn=input_fn,
+                secret=True,
+                password_fn=password_fn,
+            )
+        missing = [
+            name
+            for name, value in {
+                "domains.origin": origin,
+                "domains.panel": panel,
+                "domains.front": front,
+                "ftp.host": ftp_host if ftp_enabled else "disabled",
+                "ftp.user": ftp_user if ftp_enabled else "disabled",
+                "ftp.site_dir": ftp_site_dir if ftp_enabled else "disabled",
+                "ftp.password or VHI_FTP_PASSWORD": ftp_password
+                if ftp_enabled
+                else "disabled",
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise InstallError("Missing configuration values: " + ", ".join(missing))
         cfg = cls(
-            origin_domain=valid_domain(domains.get("origin", "")),
-            panel_domain=valid_domain(domains.get("panel", domains.get("origin", ""))),
-            front_domain=valid_domain(domains.get("front", "")),
-            xhttp_path=valid_path(xhttp.get("path", "/p")),
-            xray_port=int(xhttp.get("port", 2053)),
-            xui_version=str(xui.get("version", "v3.5.0")),
-            acme_email=str(raw.get("acme_email", "")),
-            ftp_host=str(ftp.get("host", "")),
-            ftp_user=str(ftp.get("user", "")),
-            ftp_site_dir=str(ftp.get("site_dir", "")),
-            enable_ufw=bool(firewall.get("enable", True)),
-            ssh_port=int(firewall.get("ssh_port", 22)),
+            origin_domain=valid_domain(origin),
+            panel_domain=valid_domain(panel),
+            front_domain=valid_domain(front),
+            xhttp_path=valid_path(xhttp_path),
+            xray_port=xray_port,
+            xui_version=xui_version,
+            acme_email=acme_email,
+            ftp_host=ftp_host,
+            ftp_port=ftp_port,
+            ftp_user=ftp_user,
+            ftp_password=ftp_password,
+            ftp_site_dir=ftp_site_dir,
+            ftp_enabled=ftp_enabled,
+            enable_ufw=enable_ufw,
+            ssh_port=ssh_port,
         )
         if not 1024 <= cfg.xray_port <= 65535:
             raise InstallError("xhttp.port must be between 1024 and 65535")
+        if not 1 <= cfg.ftp_port <= 65535:
+            raise InstallError("ftp.port must be between 1 and 65535")
         if not re.fullmatch(r"v\d+\.\d+\.\d+", cfg.xui_version):
             raise InstallError("xui.version must be pinned, for example v3.5.0")
         if cfg.origin_domain != cfg.panel_domain:
@@ -231,19 +428,22 @@ class Installer:
             line.split("=", 1) for line in path.read_text().splitlines() if "=" in line
         )
 
+    def load_xui_secrets(self) -> None:
+        values = self.read_env(XUI_ENV)
+        self.secrets.update(
+            {
+                "panel_username": values["XUI_USERNAME"],
+                "panel_password": values["XUI_PASSWORD"],
+                "panel_port": values["XUI_PANEL_PORT"],
+                "panel_path": values["XUI_WEB_BASE_PATH"].strip("/"),
+                "api_token": values["XUI_API_TOKEN"],
+            }
+        )
+        self.save_secrets()
+
     def install_xui(self) -> None:
         if XUI_ENV.exists() and Path("/usr/local/x-ui/x-ui").exists():
-            values = self.read_env(XUI_ENV)
-            self.secrets.update(
-                {
-                    "panel_username": values["XUI_USERNAME"],
-                    "panel_password": values["XUI_PASSWORD"],
-                    "panel_port": values["XUI_PANEL_PORT"],
-                    "panel_path": values["XUI_WEB_BASE_PATH"].strip("/"),
-                    "api_token": values["XUI_API_TOKEN"],
-                }
-            )
-            self.save_secrets()
+            self.load_xui_secrets()
             self.log("3x-ui already installed")
             return
         if self.dry_run:
@@ -266,7 +466,7 @@ class Installer:
         )
         if result.returncode or not XUI_ENV.exists():
             raise InstallError(f"3x-ui installation failed: {result.stderr[-1200:]}")
-        self.install_xui()  # Load generated values using the idempotent branch.
+        self.load_xui_secrets()
         run(["/usr/local/x-ui/x-ui", "setting", "-listenIP", "127.0.0.1"])
         run(["systemctl", "restart", "x-ui"])
         self.state.done("xui")
@@ -470,18 +670,25 @@ server {{
         )
 
     def configure_ftp(self, password: str | None) -> None:
-        if not self.cfg.ftp_host:
+        if not self.cfg.ftp_enabled:
             self.log("FTP disabled; upload the generated .htaccess manually")
             return
-        password = password or os.environ.get("VHI_FTP_PASSWORD")
-        if not password and not self.dry_run:
-            password = getpass.getpass("REG.RU FTP password: ")
+        password = (
+            password or os.environ.get("VHI_FTP_PASSWORD") or self.cfg.ftp_password
+        )
         if self.dry_run:
-            self.log(f"[dry-run] upload .htaccess to {self.cfg.ftp_site_dir}")
+            self.log(
+                f"[dry-run] upload .htaccess through {self.cfg.ftp_host}:{self.cfg.ftp_port} "
+                f"to {self.cfg.ftp_site_dir}"
+            )
             return
         ftp = ftplib.FTP()
         try:
-            ftp.connect(self.cfg.ftp_host, 21, timeout=30)
+            self.log(
+                f"Connecting to FTP {self.cfg.ftp_host}:{self.cfg.ftp_port} "
+                f"as {self.cfg.ftp_user}"
+            )
+            ftp.connect(self.cfg.ftp_host, self.cfg.ftp_port, timeout=30)
             ftp.login(self.cfg.ftp_user, password or "")
             ftp.set_pasv(True)
             ftp.cwd(self.cfg.ftp_site_dir)
@@ -493,11 +700,17 @@ server {{
             ftp.storbinary(
                 "STOR .htaccess", io.BytesIO(self.htaccess(self.public_ip()).encode())
             )
+        except ftplib.all_errors as exc:
+            raise InstallError(
+                f"FTP failed for {self.cfg.ftp_host}:{self.cfg.ftp_port} "
+                f"as {self.cfg.ftp_user}, directory {self.cfg.ftp_site_dir!r}: {exc}"
+            ) from exc
         finally:
-            try:
-                ftp.quit()
-            except ftplib.all_errors:
-                ftp.close()
+            if ftp.sock is not None:
+                try:
+                    ftp.quit()
+                except ftplib.all_errors:
+                    ftp.close()
         self.state.done("ftp")
 
     def firewall(self) -> None:
@@ -543,7 +756,7 @@ server {{
             if response.status != 200:
                 raise InstallError(f"Panel HTTP {response.status}")
         self.log("Services, TLS, panel and local Xray listener verified")
-        if self.cfg.ftp_host:
+        if self.cfg.ftp_enabled:
             self.verify_front_vpn()
 
     def verify_front_vpn(self) -> None:
@@ -675,6 +888,11 @@ def main() -> None:
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="fail if required config values are missing",
+    )
     parser.add_argument("--rollback", action="store_true")
     parser.add_argument("--ftp-password", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -682,9 +900,12 @@ def main() -> None:
         if args.rollback:
             rollback()
         else:
-            Installer(Config.load(args.config), dry_run=args.dry_run).install(
-                args.ftp_password
-            )
+            try:
+                os.chmod(args.config, 0o600)
+            except FileNotFoundError:
+                pass
+            config = Config.load(args.config, interactive=not args.non_interactive)
+            Installer(config, dry_run=args.dry_run).install(args.ftp_password)
     except (InstallError, OSError, ValueError, urllib.error.URLError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1)
