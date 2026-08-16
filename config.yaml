@@ -1,0 +1,18 @@
+# Copy to /etc/vpn-host-installer/config.yaml and edit.
+domains:
+  origin: vdsina.example.com
+  panel: vdsina.example.com
+  front: reg.example.com
+acme_email: admin@example.com
+xui:
+  version: v3.5.0  # Always pin a stable tag.
+xhttp:
+  path: /p
+  port: 2053
+ftp:
+  host: 192.0.2.20
+  user: u0000000
+  site_dir: /www/reg.example.com
+firewall:
+  enable: true
+  ssh_port: 22
