@@ -28,7 +28,7 @@ final class PollSocksServer {
         String json="{\"host\":\""+host.replace("\\","\\\\").replace("\"","\\\"")+"\",\"port\":"+port+"}";
         byte[] opened=request("POST","/open",json.getBytes(StandardCharsets.UTF_8),40000);Matcher m=Pattern.compile("\"session\"\\s*:\\s*\"([^\"]+)\"").matcher(new String(opened,StandardCharsets.UTF_8));if(!m.find())throw new IOException("No session");sid=m.group(1);
         out.write(new byte[]{5,0,0,1,0,0,0,0,0,0});out.flush();final String id=sid;final boolean[] live={true};
-        Future<?> down=pool.submit(()->{try{while(live[0]){DOWNLOAD_SLOTS.acquire();try{byte[] b=request("GET","/down/"+id+"?wait=1&max=1048576",null,10000);if(b.length>0){synchronized(out){out.write(b);out.flush();}}}finally{DOWNLOAD_SLOTS.release();}}}catch(Exception ignored){}finally{live[0]=false;try{s.shutdownInput();}catch(Exception ignored){}}});
+        Future<?> down=pool.submit(()->{try{while(live[0]){DOWNLOAD_SLOTS.acquire();try{byte[] b=request("GET","/down/"+id+"?wait=0.1&max=1048576",null,5000);if(b.length>0){synchronized(out){out.write(b);out.flush();}}}finally{DOWNLOAD_SLOTS.release();}}}catch(Exception ignored){}finally{live[0]=false;try{s.shutdownInput();}catch(Exception ignored){}}});
         byte[] b=new byte[262144];int n;while(live[0]&&(n=in.read(b))>0){byte[] chunk=new byte[n];System.arraycopy(b,0,chunk,0,n);request("POST","/up/"+id,chunk,40000);}live[0]=false;down.cancel(true);
     }catch(Exception e){e.printStackTrace();}finally{if(sid!=null)try{request("DELETE","/close/"+sid,null,5000);}catch(Exception ignored){}}}
 

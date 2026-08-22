@@ -20,7 +20,7 @@ public class RelayVpnService extends VpnService {
         Builder b=new Builder().setSession("Metadmin Relay").setMtu(1500).addAddress("10.77.0.2",24).addRoute("0.0.0.0",0).addDnsServer("198.18.0.2");
         b.addDisallowedApplication(getPackageName());tun=b.establish();if(tun==null)throw new Exception("VPN permission missing");
         hev=new HevSocks5Tunnel();TunnelConfig cfg=new TunnelConfig.Builder().setSocks5Address("127.0.0.1").setSocks5Port(10809).setTunMtu(1500).setTunIPv4Address("10.77.0.2").setTunIPv4Gateway("10.77.0.1").build();
-        String yaml=cfg.toYaml()+"mapdns:\n  address: 198.18.0.2\n  port: 53\n  network: 100.64.0.0\n  netmask: 255.192.0.0\n  cache-size: 10000\n";
+        String yaml=cfg.toYaml().replace("misc:\n","misc:\n  max-session-count: 4\n")+"mapdns:\n  address: 198.18.0.2\n  port: 53\n  network: 100.64.0.0\n  netmask: 255.192.0.0\n  cache-size: 10000\n";
         File configFile=new File(getCacheDir(),"hev.yml");try(FileOutputStream out=new FileOutputStream(configFile)){out.write(yaml.getBytes(StandardCharsets.UTF_8));}
         hev.startAsync(configFile.getAbsolutePath(),tun.getFd());
     }catch(Exception e){e.printStackTrace();stopAll();}}
