@@ -7,13 +7,13 @@ import java.util.concurrent.*;
 import java.util.regex.*;
 
 final class PollSocksServer {
-    private static final Semaphore DOWNLOAD_SLOTS = new Semaphore(2, true);
     private final String relay, key;
     private final ExecutorService pool=Executors.newCachedThreadPool();
+    private final ConcurrentHashMap<String,Downstream> downstreams=new ConcurrentHashMap<>();
     private volatile boolean running;
     private ServerSocket server;
     PollSocksServer(String relay,String key){this.relay=relay;this.key=key;}
-    void start() throws IOException { server=new ServerSocket(); server.setReuseAddress(true); server.bind(new InetSocketAddress("127.0.0.1",10809)); running=true; pool.execute(this::accept); }
+    void start() throws IOException { server=new ServerSocket(); server.setReuseAddress(true); server.bind(new InetSocketAddress("127.0.0.1",10809)); running=true; pool.execute(this::accept);pool.execute(this::downloadMux); }
     void stop(){running=false;try{server.close();}catch(Exception ignored){}pool.shutdownNow();}
     private void accept(){while(running)try{Socket s=server.accept();pool.execute(()->handle(s));}catch(IOException e){if(running)e.printStackTrace();}}
     private byte[] exact(InputStream in,int n)throws IOException{byte[] b=new byte[n];int p=0,r;while(p<n&&(r=in.read(b,p,n-p))>0)p+=r;if(p!=n)throw new EOFException();return b;}
@@ -27,10 +27,14 @@ final class PollSocksServer {
         if(command!=1)return;
         String json="{\"host\":\""+host.replace("\\","\\\\").replace("\"","\\\"")+"\",\"port\":"+port+"}";
         byte[] opened=request("POST","/open",json.getBytes(StandardCharsets.UTF_8),40000);Matcher m=Pattern.compile("\"session\"\\s*:\\s*\"([^\"]+)\"").matcher(new String(opened,StandardCharsets.UTF_8));if(!m.find())throw new IOException("No session");sid=m.group(1);
-        out.write(new byte[]{5,0,0,1,0,0,0,0,0,0});out.flush();final String id=sid;final boolean[] live={true};
-        Future<?> down=pool.submit(()->{try{while(live[0]){DOWNLOAD_SLOTS.acquire();try{byte[] b=request("GET","/down/"+id+"?wait=0.1&max=1048576",null,5000);if(b.length>0){synchronized(out){out.write(b);out.flush();}}}finally{DOWNLOAD_SLOTS.release();}}}catch(Exception ignored){}finally{live[0]=false;try{s.shutdownInput();}catch(Exception ignored){}}});
-        byte[] b=new byte[262144];int n;while(live[0]&&(n=in.read(b))>0){byte[] chunk=new byte[n];System.arraycopy(b,0,chunk,0,n);request("POST","/up/"+id,chunk,40000);}live[0]=false;down.cancel(true);
-    }catch(Exception e){e.printStackTrace();}finally{if(sid!=null)try{request("DELETE","/close/"+sid,null,5000);}catch(Exception ignored){}}}
+        Downstream downstream=new Downstream(s,out);downstreams.put(sid,downstream);
+        out.write(new byte[]{5,0,0,1,0,0,0,0,0,0});out.flush();
+        byte[] b=new byte[262144];int n;while(running&&(n=in.read(b))>0){byte[] chunk=new byte[n];System.arraycopy(b,0,chunk,0,n);request("POST","/up/"+sid,chunk,40000);}
+    }catch(Exception e){e.printStackTrace();}finally{if(sid!=null){downstreams.remove(sid);try{request("DELETE","/close/"+sid,null,5000);}catch(Exception ignored){}}}}
+
+    private void downloadMux(){while(running)try{byte[] framed=request("GET","/mux/down?wait=1",null,10000);int p=0;while(p<framed.length){if(framed.length-p<37)throw new IOException("Short mux header");String sid=new String(framed,p,32,StandardCharsets.US_ASCII);p+=32;int flags=u(framed[p++]);int length=(u(framed[p])<<24)|(u(framed[p+1])<<16)|(u(framed[p+2])<<8)|u(framed[p+3]);p+=4;if(length<0||length>framed.length-p)throw new IOException("Invalid mux frame");Downstream target=downstreams.get(sid);if(target!=null){if(length>0)synchronized(target.out){target.out.write(framed,p,length);target.out.flush();}if((flags&1)!=0){downstreams.remove(sid);try{target.socket.shutdownInput();}catch(Exception ignored){}}}p+=length;}}catch(Exception e){if(running)try{Thread.sleep(250);}catch(InterruptedException ignored){Thread.currentThread().interrupt();return;}}}
+
+    private static final class Downstream{final Socket socket;final OutputStream out;Downstream(Socket socket,OutputStream out){this.socket=socket;this.out=out;}}
 
     private void handleUdpAssociation(Socket control,InputStream controlIn,OutputStream controlOut)throws IOException{
         try(DatagramSocket local=new DatagramSocket(new InetSocketAddress(InetAddress.getLoopbackAddress(),0));
