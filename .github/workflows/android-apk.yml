@@ -20,7 +20,7 @@ jobs:
       - run: sdkmanager 'ndk;25.1.8937393' 'cmake;3.22.1'
       - run: git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/heiher/hev-socks5-tunnel.git ../hev-socks5-tunnel
       - run: |
-          "$ANDROID_HOME/ndk/25.1.8937393/ndk-build" -C ../hev-socks5-tunnel -j2
+          "$ANDROID_HOME/ndk/25.1.8937393/ndk-build" NDK_PROJECT_PATH=../hev-socks5-tunnel APP_BUILD_SCRIPT=../hev-socks5-tunnel/Android.mk NDK_APPLICATION_MK=../hev-socks5-tunnel/Application.mk -j2
           cp ../hev-socks5-tunnel/libs/arm64-v8a/libhev-socks5-tunnel.so library/src/main/jniLibs/arm64-v8a/
           cp ../hev-socks5-tunnel/libs/armeabi-v7a/libhev-socks5-tunnel.so library/src/main/jniLibs/armeabi-v7a/
       - run: chmod +x gradlew && ./gradlew assembleDebug --stacktrace
