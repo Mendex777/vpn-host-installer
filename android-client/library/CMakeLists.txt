@@ -6,6 +6,7 @@ project("hev-socks5-tunnel-android")
 add_library(hev-socks5-tunnel-core SHARED IMPORTED)
 set_target_properties(hev-socks5-tunnel-core PROPERTIES
     IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}/libhev-socks5-tunnel-core.so
+    IMPORTED_NO_SONAME TRUE
 )
 
 # JNI wrapper library - теперь C файл! 
