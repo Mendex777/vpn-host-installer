@@ -18,6 +18,7 @@ jobs:
           cache: gradle
       - uses: android-actions/setup-android@v3
       - run: sdkmanager 'ndk;25.1.8937393' 'cmake;3.22.1'
+      - run: git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/heiher/hev-socks5-tunnel.git ../hev-socks5-tunnel
       - run: chmod +x gradlew && ./gradlew assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
