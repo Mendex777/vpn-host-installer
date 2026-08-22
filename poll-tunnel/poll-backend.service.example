@@ -1,0 +1,15 @@
+[Unit]
+Description=HTTP polling TCP backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/poll-tunnel/backend.env
+ExecStart=/usr/bin/python3 /opt/poll-tunnel/backend.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
