@@ -1,1 +1,1 @@
-PyYAML>=6.0,<7
+paramiko>=3.5,<5

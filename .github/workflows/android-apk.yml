@@ -10,15 +10,18 @@ jobs:
       run:
         working-directory: android-client
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
       - uses: android-actions/setup-android@v3
       - run: sdkmanager 'ndk;25.1.8937393' 'cmake;3.22.1'
-      - run: git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/heiher/hev-socks5-tunnel.git ../hev-socks5-tunnel
+      - run: |
+          git clone https://github.com/heiher/hev-socks5-tunnel.git ../hev-socks5-tunnel
+          git -C ../hev-socks5-tunnel checkout 0428c4ebb0df933ebac8e507832f252ef7da47f1
+          git -C ../hev-socks5-tunnel submodule update --init --recursive --depth 1
       - run: |
           "$ANDROID_HOME/ndk/25.1.8937393/ndk-build" NDK_PROJECT_PATH=../hev-socks5-tunnel APP_BUILD_SCRIPT=../hev-socks5-tunnel/Android.mk NDK_APPLICATION_MK=../hev-socks5-tunnel/Application.mk -j2
           cp ../hev-socks5-tunnel/libs/arm64-v8a/libhev-socks5-tunnel.so library/src/main/jniLibs/arm64-v8a/

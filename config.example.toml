@@ -1,0 +1,22 @@
+[vps]
+host = "192.0.2.10"
+port = 22
+user = "root"
+password = ""
+domain = "backend.example.com"
+acme_email = "admin@example.com"
+
+[shared]
+relay_domain = "relay.example.com"
+ftp_host = "192.0.2.20"
+ftp_port = 21
+ftp_user = "u0000000"
+ftp_password = ""
+ftp_tls = false
+site_dir = "/www/relay.example.com"
+
+[relay]
+# Leave blank on the first run to generate cryptographically random values.
+public_token = ""
+backend_token = ""
+path_token = ""

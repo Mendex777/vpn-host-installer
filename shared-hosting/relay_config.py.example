@@ -1,0 +1,3 @@
+PUBLIC_TOKEN = "replace-with-public-token"
+BACKEND_TOKEN = "replace-with-backend-token"
+BACKEND_BASE = "https://backend.example.com/poll-tunnel/replace-with-path-token"

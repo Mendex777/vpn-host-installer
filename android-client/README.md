@@ -1,7 +1,18 @@
 # Metadmin Relay for Android
 
-Experimental Android client for the HTTPS short-poll relay. It uses Android `VpnService`, a local SOCKS5 polling transport, and `hev-socks5-tunnel` for TUN-to-SOCKS conversion.
+Android `VpnService` client for the multiplexed HTTPS polling relay.
 
-Build with Android Studio or `./gradlew assembleDebug`. Enter the relay HTTPS URL and access key in the app; credentials are not committed to the repository.
+The app establishes a TUN interface, uses `hev-socks5-tunnel` to convert TCP
+traffic to a local SOCKS5 server, answers DNS through HEV mapped DNS, and carries
+all downstream sessions through one `/mux/down` request. Arbitrary UDP is not
+supported.
 
-This is a prototype: validate stability, battery consumption and DNS/UDP behavior before daily use.
+Build:
+
+```bash
+./gradlew assembleDebug
+```
+
+The CI workflow downloads and compiles the native HEV library before Gradle.
+Enter the public relay HTTPS URL and public token in the app. Credentials are
+stored in Android private preferences and are not embedded in the repository.

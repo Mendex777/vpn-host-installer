@@ -1,105 +1,80 @@
-# VPN Host Installer
+# Metadmin Poll Relay
 
-Repeatable installer for a verified topology:
-
-```text
-XHTTP client → HTTPS shared-hosting front → HTTP VPS/Nginx
-             → 3x-ui managed Xray on 127.0.0.1 → Internet
-```
-
-It intentionally supports one tested setup: Ubuntu/Debian, a pinned 3x-ui release, VLESS/XHTTP `packet-up`, Nginx, UFW, and an Apache shared-hosting front (tested with REG.RU).
-
-## Safety
-
-- No passwords or generated UUIDs belong in Git.
-- FTP password may come from hidden input, protected YAML, or `VHI_FTP_PASSWORD`.
-- Credentials are stored in `/etc/vpn-host-installer/secrets.json` with mode `0600`.
-- Commands use argument arrays instead of interpolated shell strings.
-- 3x-ui is the only process managing Xray.
-- Re-runs preserve the UUID and update the tagged inbound.
-- Existing Nginx and remote `.htaccess` files are backed up.
-- Existing UFW rules are not reset.
-
-## DNS prerequisites
+TCP VPN transport through REG.RU shared hosting without `mod_proxy`, WebSocket,
+or long-lived requests. The shared host runs a small Passenger/WSGI application
+that forwards short authenticated HTTPS requests to a VPS. The Android client
+converts the device TUN interface to SOCKS5 and multiplexes all downstream TCP
+sessions through one polling request.
 
 ```text
-origin.example.com  A  VPS_IP
-panel.example.com   A  VPS_IP  # may be the same as origin
-front.example.com   A  SHARED_HOSTING_IP
+Android apps
+    │ TUN + HEV mapdns
+    ▼
+Android polling SOCKS5 client
+    │ HTTPS short requests: open / up / mux-down / close
+    ▼
+REG.RU Passenger WSGI (public relay domain, allowed shared-hosting address)
+    │ HTTPS + private backend token
+    ▼
+VPS Nginx → poll-tunnel backend on 127.0.0.1:18080
+    │ ordinary TCP sockets
+    ▼
+Internet
 ```
 
-Create the front-domain website on the shared hosting and enable TLS there.
+The legacy 3x-ui/XHTTP installer is preserved in branch `xhttp_old`. It is not
+part of the current polling relay.
 
-## Install
+## Components
 
-The first bootstrap run creates the configuration and stops. On the next command,
-every blank or example value is requested interactively:
+- `android-client/` — Android `VpnService`, HEV tun2socks and multiplexed polling transport.
+- `poll-tunnel/backend.py` — authenticated VPS TCP session backend.
+- `shared-hosting/passenger_wsgi.py` — stateless REG.RU Passenger forwarder.
+- `deploy.py` — repeatable deployment from a workstation over SSH/SFTP and FTP/FTPS.
+- `config.example.toml` — deployment configuration template.
+- `docs/MANUAL_SETUP_RU.md` — complete manual installation in Russian.
+
+## Automated deployment
+
+Requirements: Python 3.11+, DNS records for both domains, root SSH access to the
+VPS, and FTP/FTPS access to the REG.RU website directory.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mendex777/vpn-host-installer/main/install.sh | bash
-nano /etc/vpn-host-installer/config.yaml
-/opt/vpn-host-installer/.venv/bin/python /opt/vpn-host-installer/install.py
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp config.example.toml config.toml
+nano config.toml
+.venv/bin/python deploy.py --config config.toml
 ```
 
-For non-interactive FTP authentication:
+On Windows PowerShell use `.venv\Scripts\python.exe` instead. Missing passwords
+and tokens are requested without echo. Generated tokens are saved to
+`deployment-secrets.toml`; protect that file and never commit it.
+
+The deployer installs the VPS service and Nginx, obtains a webroot Let's Encrypt
+certificate, uploads the WSGI relay to REG.RU, restarts Passenger, and validates
+both health endpoints. Re-running it reconciles the same deployment. Managed VPS
+files are backed up with a timestamp before replacement.
+
+## Build Android APK
+
+Pushes affecting `android-client/` trigger GitHub Actions. The APK is available
+as the `metadmin-relay-debug-apk` workflow artifact. It can also be built with:
 
 ```bash
-read -rsp "FTP password: " VHI_FTP_PASSWORD
-export VHI_FTP_PASSWORD
-/opt/vpn-host-installer/.venv/bin/python /opt/vpn-host-installer/install.py
-unset VHI_FTP_PASSWORD
+cd android-client
+./gradlew assembleDebug
 ```
 
-Never place the password directly in command arguments. Prefer hidden input or
-`VHI_FTP_PASSWORD`; YAML is supported when unattended installation requires it.
+In the app enter `https://relay.example.com` and the generated public relay token.
 
-All interactive values can instead be supplied in YAML, including FTP connection
-details and `ftp.password`. The file is created and enforced with mode `0600`.
-For unattended provisioning, use:
+## Security and limitations
 
-```bash
-/opt/vpn-host-installer/.venv/bin/python /opt/vpn-host-installer/install.py --non-interactive
-```
+- Use independent random public, backend and URL-path tokens.
+- The REG.RU-to-VPS leg is HTTPS; the backend listens only on loopback.
+- Only TCP is transported. DNS uses HEV mapped DNS; arbitrary UDP is unsupported.
+- Shared hosting adds latency and bandwidth limits.
+- The current Android build is a debug build; use a private release signing key
+  before distributing it.
 
-This mode never prompts. It reports every missing required field before changing
-the server. `VHI_FTP_PASSWORD` overrides `ftp.password` and is preferable in CI.
-
-## Configuration and repeat runs
-
-See [`config.yaml`](config.yaml). `xui.version` must be an exact tag such as `v3.5.0`; moving targets such as `latest` are rejected.
-
-FTP configuration includes `enabled`, `host`, `port`, `user`, `password`, and
-`site_dir`. Example/test values are deliberately rejected as incomplete.
-
-The Apache rule proxies the entire XHTTP route tree:
-
-```apache
-RewriteRule ^p(.*)$ http://VPS_IP/p$1 [P,L,NE]
-```
-
-This matters because XHTTP creates URLs such as `/p/<session-id>/0`. Re-run the same command to reconcile the existing installation; state lives under `/etc`, outside the replaceable `/opt` code directory.
-
-## Rollback
-
-```bash
-/opt/vpn-host-installer/.venv/bin/python /opt/vpn-host-installer/install.py --rollback
-```
-
-Rollback restores local Nginx when a backup exists. It deliberately preserves 3x-ui, its database, firewall rules, and remote FTP data.
-
-## Validation
-
-The installer checks DNS, Nginx syntax, services, panel TLS, and the local Xray listener. A real client test is still recommended because shared hosts may change proxy limits.
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-## Limitations
-
-- One local 3x-ui node only.
-- Keep `origin` and `panel` equal for now; one certificate is issued.
-- FTP is unencrypted where that is all the plan exposes; prefer FTPS/SFTP when available.
-- Shared hosting is not a CDN and its proxy policy can change.
-
-Use only where permitted by applicable law and provider terms.
+Use only where allowed by law and the terms of both providers.
