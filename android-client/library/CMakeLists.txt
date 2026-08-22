@@ -13,6 +13,7 @@ set_target_properties(hev-socks5-tunnel-core PROPERTIES
 add_library(hev-socks5-tunnel-jni SHARED
     src/main/cpp/hev_socks5_tunnel_jni.c
 )
+target_compile_definitions(hev-socks5-tunnel-jni PRIVATE PKGNAME=cc/hev/socks5/tunnel CLSNAME=HevSocks5Tunnel)
 
 # Add include directories
 target_include_directories(hev-socks5-tunnel-jni PRIVATE
